@@ -24,3 +24,9 @@ For a no-subscription test, use a 2GIS demo key if you have one. Configure `DGIS
 
 Deploy the project to Vercel (the `/api` directory is discovered as serverless functions) or run it locally with Vercel CLI (`npx vercel dev`). A plain static server such as `python -m http.server` serves the pages but does not run `/api/places`. 2GIS text search uses the selected category and city as the documented textual geographic restriction. Check the applicable 2GIS API terms and key entitlements before retaining, exporting, or bulk importing results. The current search flow does not persist provider data.
 
+
+## Local account features
+
+The account page (`account.html`) is device-local and has no registration or identity verification. Favorites, saved searches (maximum 30), and display preferences use separate LocalStorage keys. Saved searches can restore the catalog query, category, city, region, and sort order. Browser storage can be cleared and does not synchronize between devices.
+
+2GIS search results are transient and are not written to favorites, saved searches, LocalStorage, or `businesses.json`. Persisting provider records requires review of 2GIS retention and display terms first.
