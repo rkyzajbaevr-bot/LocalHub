@@ -1,0 +1,11 @@
+{
+  "rewrites": [
+    { "source": "/categories", "destination": "/categories.html" },
+    { "source": "/login", "destination": "/login.html" },
+    { "source": "/register", "destination": "/register.html" },
+    { "source": "/forgot-password", "destination": "/forgot-password.html" },
+    { "source": "/update-password", "destination": "/update-password.html" },
+    { "source": "/account", "destination": "/account.html" },
+    { "source": "/admin", "destination": "/admin.html" }
+  ]
+}

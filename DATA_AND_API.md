@@ -1,32 +1,48 @@
-# LocalHub Kazakhstan: data and integrations
+# LocalHub Kazakhstan: application and data architecture
 
-The static front end reads `businesses.json` (`schemaVersion: 1`, `businesses: []`). Empty data is intentional; no sample businesses or unverified ratings are bundled.
+## Hosting
 
-Each business record supports: `id` (unique string), `name`, `category` (one of the category IDs in `script.js`), `city`, optional `region`, `address`, optional numeric `lat` and `lon`, `phone`, `website`, `photo`, `source`, `updatedAt` (ISO date), optional `hours`, and optional `rating` with `ratingSource`. Ratings are displayed only when both a rating and its source are present. Missing fields display “Не указано”.
+The public application is a static multi-page site served by Vercel. Vercel discovers CommonJS handlers in `api/` as Node serverless functions. `vercel.json` adds short routes for the auth, categories, account, and admin HTML pages. A plain static web server can render catalog pages, but it cannot run the `/api/*` endpoints.
 
-The add form stores user submissions in browser `localStorage` under `localhub:pending`; this is a local intake queue and does not publish into the shared directory. Favorites use `localhub:favorites`.
+## Supabase configuration
 
-## Production data architecture
+Set these Vercel environment variables without placing values in source control:
 
-Use a server-side API (for example Node.js + PostgreSQL/PostGIS) for moderated submissions, bulk imports, deduplication by provider ID/coordinates/name, source provenance, and update history. Serve normalized records to the static client through `/api/businesses`. Keep provider credentials in server environment variables. Implement separate server adapters for 2GIS and Yandex Maps, respecting each provider's terms and attribution requirements. Do not put secret keys in browser JavaScript. Yandex/2GIS map rendering and provider imports require provider accounts, API credentials, server-side integration and licensing review.
+- `SUPABASE_URL`
+- `SUPABASE_PUBLISHABLE_KEY` (the legacy `SUPABASE_ANON_KEY` is accepted as a fallback)
+- `SUPABASE_SERVICE_ROLE_KEY` (server only; currently required for validated submission writes and Auth Admin operations)
+- `DGIS_API_KEY` (server only, used by `api/places.js`)
 
-For bulk import, validate JSON Lines or CSV against the schema, normalize category and city names, require a source and update date, reject duplicate IDs, and stage records for review before publication. The current static client can use a generated `businesses.json` export.
+`api/supabase-config.js` returns only the URL and publishable key. `lib/supabase-server.js` verifies bearer tokens against Supabase Auth and reads the service role key only in server functions. Never put the service role key in a browser bundle or share it in support messages.
 
-## Running locally
+The Supabase JavaScript SDK is loaded from jsDelivr at the pinned version `2.118.0`. Auth sessions are persisted by Supabase JS in browser storage. Cloud favorites and searches are cached under per-user LocalStorage keys; guest data uses separate guest keys. Signing out switches the UI to the guest namespace and does not delete database rows.
 
-Because the browser fetches JSON, serve this directory over HTTP (for example `python -m http.server 8000`) and open `http://localhost:8000`. Opening `index.html` as a `file://` URL may block the JSON fetch.
+## Database setup
 
-## 2GIS Places API test search
+Apply migrations in filename order:
 
-The map page includes an on-demand search wired to the Vercel Function `api/places.js`. It sends only the selected city, LocalHub category, and page to the same-origin endpoint. The function reads `DGIS_API_KEY` from the server environment, calls Places API 3.0 `/3.0/items`, and returns only the provider's ID, name, address, WGS84 point, and source. No key is returned to the browser. Search results and selections remain in memory for the current page session; they are not written to `businesses.json`, LocalStorage, or a database.
+1. `supabase/migrations/20261104000000_localhub_platform.sql`
+2. `supabase/migrations/20261104010000_submission_gateway_and_admin_audit.sql`
+3. `supabase/migrations/20261106000000_admin_only_live_role.sql`
 
-For a no-subscription test, use a 2GIS demo key if you have one. Configure `DGIS_API_KEY` in the Vercel project environment variables, then redeploy. Do not put the key in front-end code or commit a `.env` file. Without that environment variable the endpoint returns a clear `api_key_missing` message. The test endpoint allows at most 10 requests per minute per warm function instance, 10 results per page, and five pages. The in-memory rate limit is best-effort because Vercel may run multiple serverless instances.
+The first migration creates categories, profiles, the published organization catalog, favorites, saved searches, search history, submissions, moderation events, role helpers, RLS policies, and the review/dashboard RPCs. The second migration removes direct client INSERT permission on submissions, grants server-role insert access, adds catalog audit triggers, and adds the server-only audit RPC for Auth Admin actions.
 
-Deploy the project to Vercel (the `/api` directory is discovered as serverless functions) or run it locally with Vercel CLI (`npx vercel dev`). A plain static server such as `python -m http.server` serves the pages but does not run `/api/places`. 2GIS text search uses the selected category and city as the documented textual geographic restriction. Check the applicable 2GIS API terms and key entitlements before retaining, exporting, or bulk importing results. The current search flow does not persist provider data.
+RLS is required for every table exposed through Supabase Data API. The browser writes only user-owned favorites, saved searches, and search history. Organization submissions are created only through `POST /api/submissions`; the function verifies the user's access token, validates fields, enforces its per-instance request limit, sets `user_id` from the verified user, and inserts using the server-only key. Do not grant `authenticated` INSERT on `organization_submissions` again.
 
+The only privileged role is `admin`. Server routes verify the user through Supabase Auth and allow administrative actions only when the current `app_metadata.role` is `admin`. Database RLS and RPC role helpers read the current `auth.users.raw_app_meta_data` for `auth.uid()` through a narrowly scoped `SECURITY DEFINER` function, so a previously issued JWT cannot preserve admin rights after the role is removed. Existing `moderator` values are left unchanged and treated as ordinary users; no user rows are mass-updated. Clients cannot write `app_metadata`; a first admin must be provisioned out of band by a trusted project owner. Admin API role and block actions are recorded in `moderation_events`; category and organization mutations are logged by database triggers; moderation decisions are logged by the review RPC.
 
-## Local account features
+## Auth setup
 
-The account page (`account.html`) is device-local and has no registration or identity verification. Favorites, saved searches (maximum 30), and display preferences use separate LocalStorage keys. Saved searches can restore the catalog query, category, city, region, and sort order. Browser storage can be cleared and does not synchronize between devices.
+Configure the Supabase Auth Site URL and allowed redirect URLs for the deployed domain, including `/login` and `/update-password`. Configure email delivery and confirmation policy in the Supabase project. For local end-to-end auth/API testing, use `vercel dev` with a private local `.env.local`; a static server alone does not exercise these routes.
 
-2GIS search results are transient and are not written to favorites, saved searches, LocalStorage, or `businesses.json`. Persisting provider records requires review of 2GIS retention and display terms first.
+## Catalog and provider data
+
+`businesses.json` intentionally contains no sample businesses. Published LocalHub organization records live in Supabase and are separate from transient 2GIS responses. Approved user submissions become LocalHub records; 2GIS search results are not persisted automatically.
+
+`api/places.js` reads `DGIS_API_KEY` only on the server and calls 2GIS Places API. Its in-memory limit (10 requests per minute per warm function instance, five pages, ten records per page) is best effort. It is not a shared distributed quota and can be bypassed across serverless instances. Before production traffic, consider Vercel-level rate limiting or a shared store such as Redis/Upstash; no external rate-limit service is configured by this project.
+
+Leaflet uses OpenStreetMap tiles without an API key, with attribution and a cross-origin referrer policy. Do not increase tile request volume or proxy OSM tiles. The map only renders LocalHub records with coordinates and 2GIS markers returned for the current search session.
+
+## Local data
+
+Guest favorites and saved searches are stored locally under guest-specific keys. Signed-in account caches are namespaced by Supabase user ID and are refreshed from the database. Display preferences and the list of locally-added cities remain device-local. Guest submissions remain drafts on that device; authenticated submissions are sent to the moderation queue. The old unscoped favorites/search cache keys are cleared because they cannot be safely attributed to a guest or a particular account; this does not delete database rows.
