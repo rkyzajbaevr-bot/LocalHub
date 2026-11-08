@@ -77,6 +77,33 @@
     renderRows($("eventRows"), items || [], (item) => `<tr><td>${esc(item.action)}</td><td>${esc(item.entity_type)}</td><td>${esc(item.entity_id)}</td><td>${esc(new Date(item.created_at).toLocaleString("ru-RU"))}</td></tr>`);
   }
 
+  async function loadReports() {
+    const { items } = await request("reports");
+    const labels = { wrong_address: "Неверный адрес", wrong_phone: "Неверный телефон", closed: "Закрылась", wrong_hours: "Неверный график", duplicate: "Дубликат", wrong_category: "Неверная категория", other: "Другое" };
+    renderRows($("reportRows"), items || [], (item) => `<tr><td><b>${esc(item.organizations?.name || item.organization_id)}</b><small>${esc(item.organizations?.city || "")}, ${esc(item.organizations?.address || "")}</small></td><td>${esc(labels[item.issue_type] || item.issue_type)}</td><td>${esc(item.description || "—")}</td><td>${esc(item.status)}</td><td>${esc(new Date(item.created_at).toLocaleString("ru-RU"))}</td><td><div class="admin-actions"><select data-report-status="${esc(item.id)}"><option value="" selected disabled>Выбрать действие</option><option value="reviewing">Рассматривается</option><option value="resolved">Решена</option><option value="rejected">Отклонена</option></select><button type="button" class="btn" data-report-save="${esc(item.id)}">Сохранить</button><button type="button" class="btn btn--ghost" data-report-history="${esc(item.id)}">История</button></div></td></tr>`);
+  }
+  async function loadBadges() {
+    const { items } = await request("badges");
+    renderRows($("badgeRows"), items || [], (item) => `<tr><td>${esc(item.organizations?.name || item.organization_id)}</td><td>${esc(item.badge_type)}</td><td>${esc(item.source)}</td><td>${esc(item.expires_at || "Без срока")}</td><td><button class="btn btn--ghost" type="button" data-badge-delete="${esc(item.organization_id)}" data-badge-type="${esc(item.badge_type)}">Снять</button></td></tr>`);
+  }
+  async function loadCampaigns() {
+    const { items } = await request("campaigns");
+    renderRows($("campaignRows"), items || [], (item) => `<tr><td>${esc(item.name)}</td><td>${esc(item.placement)}</td><td>${esc(item.status)}</td><td>${esc(item.impressions)} / ${esc(item.clicks)}</td><td>${esc(new Date(item.starts_at).toLocaleDateString("ru-RU"))} — ${esc(new Date(item.ends_at).toLocaleDateString("ru-RU"))}</td><td><div class="admin-actions"><button class="btn btn--ghost" type="button" data-campaign-edit="${esc(item.id)}">Изменить</button><button class="btn btn--ghost" type="button" data-campaign-delete="${esc(item.id)}">Удалить</button></div></td></tr>`);
+  }
+  async function loadOwners() {
+    const { items } = await request("owners");
+    renderRows($("ownerRows"), items || [], (item) => `<tr><td>${esc(item.organizations?.name || item.organization_id)}</td><td>${esc(item.organization_id)}</td><td>${esc(item.user_id)}</td><td>${esc(new Date(item.confirmed_at).toLocaleString("ru-RU"))}</td><td><button class="btn btn--ghost" type="button" data-owner-remove="${esc(item.organization_id)}" data-user-id="${esc(item.user_id)}">Отозвать</button></td></tr>`);
+  }
+  async function loadStatistics(organizationId) {
+    const { summary } = await request("statistics", "GET", null, { organizationId });
+    $("adminStatisticsMetrics").innerHTML = [["Сегодня", summary.today], ["7 дней", summary.days_7], ["30 дней", summary.days_30], ["За всё время", summary.all_time]].map(([label, value]) => `<article><span>${label}</span><b>${Number(value) || 0}</b></article>`).join("");
+    const activity = Array.isArray(summary.activity) ? summary.activity : [];
+    const maximum = Math.max(1, ...activity.map((item) => Number(item.count) || 0));
+    const chart = $("adminStatisticsActivity");
+    chart.innerHTML = activity.map((item) => `<span title="${esc(item.day)}: ${Number(item.count) || 0}" style="--bar:${Math.max(3, (Number(item.count) || 0) / maximum * 100)}%"></span>`).join("");
+    chart.hidden = !activity.length;
+  }
+
   async function activate() {
     const auth = window.LocalHubAuth;
     if (!auth?.ready) return message("Supabase не настроен. Для работы панели требуется реальная сессия и база данных.", true);
@@ -104,6 +131,10 @@
       if (button.dataset.adminTab === "categories") await loadCategories();
       if (button.dataset.adminTab === "organizations") await loadOrganizations();
       if (button.dataset.adminTab === "events") await loadEvents();
+      if (button.dataset.adminTab === "reports") await loadReports();
+      if (button.dataset.adminTab === "badges") await loadBadges();
+      if (button.dataset.adminTab === "campaigns") await loadCampaigns();
+      if (button.dataset.adminTab === "owners") await loadOwners();
     } catch (error) { message(error.message, true); }
   }));
 
@@ -154,12 +185,13 @@
       const { items } = await request("organizations");
       const item = (items || []).find((row) => row.id === edit.dataset.organizationEdit);
       if (!item) throw new Error("Организация больше не найдена.");
-      const fields = ["name", "category_id", "city", "region", "address", "lat", "lon", "phone", "website", "photo", "hours", "rating", "rating_source", "source"];
+      const fields = ["name", "category_id", "city", "region", "address", "lat", "lon", "phone", "website", "photo", "hours", "rating", "rating_source", "source", "description", "price_summary", "services"];
       const updated = { id: item.id };
       for (const field of fields) {
         const value = prompt(`Измените ${field}:`, item[field] == null ? "" : String(item[field]));
         if (value === null) return;
-        updated[field] = ["lat", "lon", "rating"].includes(field) && value.trim() ? Number(value) : value.trim() || null;
+        if (field === "services") updated[field] = value.trim() ? value.split(",").map((item) => item.trim()).filter(Boolean) : [];
+        else updated[field] = ["lat", "lon", "rating"].includes(field) && value.trim() ? Number(value) : value.trim() || null;
       }
       if (!confirm("Сохранить изменения организации?")) return;
       await request("organization-update", "POST", updated);
@@ -180,6 +212,63 @@
     if (!confirm(blocked ? "Заблокировать пользователя?" : "Разблокировать пользователя?")) return;
     try { await request("user-block", "POST", { userId: button.dataset.userBlock, blocked }); message("Статус пользователя обновлён."); await loadUsers(); }
     catch (error) { message(error.message, true); }
+  });
+
+  $("reportRows").addEventListener("click", async (event) => {
+    const history = event.target.closest("[data-report-history]");
+    if (history) {
+      try { const { items } = await request("report-events", "GET", null, { reportId: history.dataset.reportHistory }); const lines = (items || []).map((item) => `${new Date(item.created_at).toLocaleString("ru-RU")} · ${item.action} · ${JSON.stringify(item.details || {})}`); alert(lines.join("\n") || "История действий пуста."); }
+      catch (error) { message(error.message, true); }
+      return;
+    }
+    const button = event.target.closest("[data-report-save]"); if (!button) return;
+    const select = document.querySelector(`[data-report-status="${CSS.escape(button.dataset.reportSave)}"]`);
+    if (!select?.value) return message("Выберите новый статус жалобы.", true);
+    try { await request("report-review", "POST", { reportId: button.dataset.reportSave, status: select.value, note: "" }); message("Статус жалобы обновлён."); await loadReports(); }
+    catch (error) { message(error.message, true); }
+  });
+  $("badgeForm").addEventListener("submit", async (event) => {
+    event.preventDefault(); const values = Object.fromEntries(new FormData(event.currentTarget));
+    if (values.expiresAt) values.expiresAt = new Date(values.expiresAt).toISOString(); else delete values.expiresAt;
+    try { await request("badge-save", "POST", values); message("Метка сохранена."); event.currentTarget.reset(); await loadBadges(); }
+    catch (error) { message(error.message, true); }
+  });
+  $("badgeRows").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-badge-delete]"); if (!button || !confirm("Снять эту метку?")) return;
+    try { await request("badge-delete", "POST", { organizationId: button.dataset.badgeDelete, badgeType: button.dataset.badgeType }); message("Метка снята."); await loadBadges(); }
+    catch (error) { message(error.message, true); }
+  });
+  $("campaignForm").addEventListener("submit", async (event) => {
+    event.preventDefault(); const values = Object.fromEntries(new FormData(event.currentTarget));
+    for (const field of ["starts_at", "ends_at"]) if (values[field]) values[field] = new Date(values[field]).toISOString();
+    try { await request("campaign-save", "POST", values); message("Кампания сохранена."); event.currentTarget.reset(); await loadCampaigns(); }
+    catch (error) { message(error.message, true); }
+  });
+  $("campaignRows").addEventListener("click", async (event) => {
+    const remove = event.target.closest("[data-campaign-delete]");
+    if (remove) { if (!confirm("Удалить кампанию?")) return; try { await request("campaign-delete", "POST", { id: remove.dataset.campaignDelete }); message("Кампания удалена."); await loadCampaigns(); } catch (error) { message(error.message, true); } return; }
+    const edit = event.target.closest("[data-campaign-edit]"); if (!edit) return;
+    try {
+      const { items } = await request("campaigns"); const item = items.find((row) => row.id === edit.dataset.campaignEdit); if (!item) return;
+      const form = $("campaignForm"); for (const [key, value] of Object.entries(item)) if (form.elements.namedItem(key)) form.elements.namedItem(key).value = ["starts_at", "ends_at"].includes(key) ? new Date(value).toISOString().slice(0, 16) : value ?? "";
+      form.scrollIntoView({ behavior: "smooth", block: "center" });
+    } catch (error) { message(error.message, true); }
+  });
+  $("ownerForm").addEventListener("submit", async (event) => {
+    event.preventDefault(); const values = Object.fromEntries(new FormData(event.currentTarget));
+    if (!confirm("Подтверждаете право этого пользователя управлять статистикой указанной организации?")) return;
+    try { await request("owner-assign", "POST", values); message("Владелец организации подтверждён."); event.currentTarget.reset(); await loadOwners(); }
+    catch (error) { message(error.message, true); }
+  });
+  $("ownerRows").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-owner-remove]"); if (!button || !confirm("Отозвать доступ владельца к аналитике?")) return;
+    try { await request("owner-remove", "POST", { organizationId: button.dataset.ownerRemove, userId: button.dataset.userId }); message("Доступ отозван."); await loadOwners(); }
+    catch (error) { message(error.message, true); }
+  });
+  $("adminStatisticsForm").addEventListener("submit", async (event) => {
+    event.preventDefault(); const value = new FormData(event.currentTarget).get("organizationId");
+    try { await loadStatistics(String(value || "").trim()); $("adminStatisticsStatus").hidden = true; }
+    catch (error) { $("adminStatisticsStatus").textContent = error.message; $("adminStatisticsStatus").hidden = false; $("adminStatisticsStatus").classList.add("is-error"); }
   });
 
   document.addEventListener("localhub:auth-ready", () => activate().catch((error) => message(error.message, true)));

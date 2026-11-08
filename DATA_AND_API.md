@@ -24,12 +24,30 @@ Apply migrations in filename order:
 1. `supabase/migrations/20261104000000_localhub_platform.sql`
 2. `supabase/migrations/20261104010000_submission_gateway_and_admin_audit.sql`
 3. `supabase/migrations/20261106000000_admin_only_live_role.sql`
+4. `supabase/migrations/20261106110000_collections_comparisons_reports.sql`
+5. `supabase/migrations/20261106120000_badges_ads_analytics.sql`
 
 The first migration creates categories, profiles, the published organization catalog, favorites, saved searches, search history, submissions, moderation events, role helpers, RLS policies, and the review/dashboard RPCs. The second migration removes direct client INSERT permission on submissions, grants server-role insert access, adds catalog audit triggers, and adds the server-only audit RPC for Auth Admin actions.
 
 RLS is required for every table exposed through Supabase Data API. The browser writes only user-owned favorites, saved searches, and search history. Organization submissions are created only through `POST /api/submissions`; the function verifies the user's access token, validates fields, enforces its per-instance request limit, sets `user_id` from the verified user, and inserts using the server-only key. Do not grant `authenticated` INSERT on `organization_submissions` again.
 
 The only privileged role is `admin`. Server routes verify the user through Supabase Auth and allow administrative actions only when the current `app_metadata.role` is `admin`. Database RLS and RPC role helpers read the current `auth.users.raw_app_meta_data` for `auth.uid()` through a narrowly scoped `SECURITY DEFINER` function, so a previously issued JWT cannot preserve admin rights after the role is removed. Existing `moderator` values are left unchanged and treated as ordinary users; no user rows are mass-updated. Clients cannot write `app_metadata`; a first admin must be provisioned out of band by a trusted project owner. Admin API role and block actions are recorded in `moderation_events`; category and organization mutations are logged by database triggers; moderation decisions are logged by the review RPC.
+
+## Platform extensions
+
+Migration `20261106110000_collections_comparisons_reports.sql` adds per-user collections and items with owner/public RLS, fields used in organization comparison, a private report queue, a server-only report submission RPC with an advisory-lock per-user hourly cap, and an admin-only review RPC with an append-only event trail. Submit a complaint through `POST /api/reports`; the browser never receives service-role credentials. Public collections are read-only, private collections are owner-only, and write policies bind to `auth.uid()`. Column-level SELECT grants omit `business_collections.owner_id` from Data API responses.
+
+Organization comparison is device-local and limited to four IDs. It uses published catalog data and displays unknown values as “Не указано”; no ratings, prices, or services are generated. `description`, `price_summary`, and `services` are optional organization fields.
+
+Migration `20261106120000_badges_ads_analytics.sql` adds admin-managed organization badges with evidence/source and optional expiry, manually managed ad campaigns, server-side campaign counters, manually confirmed business owners, and aggregate event analytics. Badge visibility is time-bounded by RLS; the `new` badge validates against the existing `organizations.published_at` column. “Реклама” is displayed only for an active ad campaign; it is not an assignable badge. Ad destinations and image URLs require HTTPS; the campaign system has no billing or behavioral targeting. Public column grants omit badge assigner IDs and ad campaign creator IDs/counters. Business owners are assigned by an administrator after an out-of-band identity check; ownership claims are never accepted from the browser.
+
+`POST /api/analytics` accepts a small action vocabulary and hashes a browser-generated random session identifier with the server-only service-role key. It stores no IP address or raw session token. A best-effort in-memory per-instance request limit and database deduplication reduce repeat inflation, but neither is a distributed anti-fraud system. `GET /api/analytics?organizationId=...` requires authentication and the database verifies current admin or confirmed ownership. Analytics are aggregates and the server never returns other users' browsing history.
+
+`GET /api/ads?placement=...` returns only active, in-date campaigns. `POST /api/ads` increments counters through a restricted service-only RPC; client requests cannot set counters. A database uniqueness key deduplicates events by campaign, event type, HMAC-derived requester hash, and hour across serverless instances; stale deduplication hashes older than the recent window are removed during event writes. This raises the cost of replay but does not provide full bot/fraud prevention. Campaign data is edited through admin API actions, with a database audit trigger. Admin API routes validate the current database role through `current_app_role()` rather than trusting an old JWT role claim.
+
+The language selector persists `ru`, `kk`, or `en` in LocalStorage. Translation strings are centralized in `i18n.js`; organization names and other business-provided facts are never machine-translated. The shared navigation, catalog category labels, and key search labels are translated; many legacy forms, admin messages, and new-page descriptions still fall back to Russian, so full three-language coverage is not complete.
+
+City/category SEO routes are backed only by currently published catalog rows. `/city/:slug` and `/:city/:category` reject unknown slugs and are marked `noindex` when there are no matching organizations. `/sitemap.xml` is generated from existing city/category combinations; it does not emit empty combinations. The current HTML architecture applies page metadata client-side, so reliable server-rendered metadata for crawlers would require SSR/prerendering.
 
 ## Auth setup
 

@@ -1,6 +1,6 @@
 "use strict";
 
-const { authenticate, hasRole, rest, send } = require("../lib/supabase-server");
+const { authenticate, rest, send } = require("../lib/supabase-server");
 const requests = new Map();
 
 function allowed(userId) {
@@ -61,11 +61,12 @@ module.exports = async function admin(req, res) {
   }
   const auth = await authenticate(req);
   if (auth.error) return send(res, auth.status, { error: auth.error, code: "auth_required" });
-  if (!hasRole(auth.user, ["admin"])) return send(res, 403, { error: "Недостаточно прав.", code: "forbidden" });
+  const liveRole = await rest(auth.config, "/rest/v1/rpc/current_app_role", { method: "POST", token: auth.token, body: {} });
+  if (!liveRole.ok || liveRole.data !== "admin") return send(res, 403, { error: "Недостаточно прав.", code: "forbidden" });
   if (!allowed(auth.user.id)) return send(res, 429, { error: "Слишком много административных запросов.", code: "rate_limited" });
 
   const action = String(req.query?.action || "");
-  const isAdmin = hasRole(auth.user, ["admin"]);
+  const isAdmin = liveRole.data === "admin";
 
   if (req.method === "GET") {
     if (action === "dashboard") {
@@ -90,7 +91,8 @@ module.exports = async function admin(req, res) {
     }
     if (action === "organizations") {
       if (!isAdmin) return send(res, 403, { error: "Управление организациями доступно только администраторам.", code: "forbidden" });
-      const result = await rest(auth.config, "/rest/v1/organizations?select=id,name,category_id,city,region,address,lat,lon,phone,website,photo,hours,rating,rating_source,source,updated_at&order=updated_at.desc&limit=500", { token: auth.token });
+      let result = await rest(auth.config, "/rest/v1/organizations?select=id,name,category_id,city,region,address,lat,lon,phone,website,photo,hours,rating,rating_source,source,updated_at,description,price_summary,services&order=updated_at.desc&limit=500", { token: auth.token });
+      if (!result.ok && ["42703", "PGRST204"].includes(result.data?.code)) result = await rest(auth.config, "/rest/v1/organizations?select=id,name,category_id,city,region,address,lat,lon,phone,website,photo,hours,rating,rating_source,source,updated_at&order=updated_at.desc&limit=500", { token: auth.token });
       if (!result.ok) return send(res, result.status, { error: "Не удалось загрузить организации каталога.", code: "organizations_unavailable" });
       return send(res, 200, { items: result.data || [] });
     }
@@ -118,6 +120,40 @@ module.exports = async function admin(req, res) {
       if (!result.ok) return send(res, result.status, { error: "Не удалось загрузить журнал модерации.", code: "events_unavailable" });
       return send(res, 200, { items: result.data || [] });
     }
+    if (action === "reports") {
+      const result = await rest(auth.config, "/rest/v1/organization_reports?select=id,organization_id,reporter_id,issue_type,description,status,created_at,updated_at,organizations(name,city,address)&order=created_at.desc&limit=200", { token: auth.token });
+      if (!result.ok) return send(res, result.status, { error: "Не удалось загрузить жалобы. Проверьте применение миграции жалоб.", code: "reports_unavailable" });
+      return send(res, 200, { items: result.data || [] });
+    }
+    if (action === "report-events") {
+      const reportId = String(req.query?.reportId || "");
+      if (!/^[0-9a-f-]{36}$/i.test(reportId)) return send(res, 400, { error: "Недопустимый ID жалобы.", code: "invalid_report" });
+      const result = await rest(auth.config, `/rest/v1/organization_report_events?select=id,actor_id,action,details,created_at&report_id=eq.${encodeURIComponent(reportId)}&order=created_at.asc&limit=100`, { token: auth.token });
+      if (!result.ok) return send(res, result.status, { error: "Не удалось загрузить историю жалобы.", code: "report_events_unavailable" });
+      return send(res, 200, { items: result.data || [] });
+    }
+    if (action === "badges") {
+      const result = await rest(auth.config, "/rest/v1/organization_badges?select=organization_id,badge_type,source,starts_at,expires_at,organizations(name)&order=created_at.desc", { token: auth.token });
+      if (!result.ok) return send(res, result.status, { error: "Не удалось загрузить метки. Проверьте применение миграции меток.", code: "badges_unavailable" });
+      return send(res, 200, { items: result.data || [] });
+    }
+    if (action === "campaigns") {
+      const result = await rest(auth.config, "/rest/v1/ad_campaigns?select=*&order=created_at.desc&limit=200", { token: auth.token });
+      if (!result.ok) return send(res, result.status, { error: "Не удалось загрузить кампании. Проверьте применение рекламной миграции.", code: "campaigns_unavailable" });
+      return send(res, 200, { items: result.data || [] });
+    }
+    if (action === "owners") {
+      const result = await rest(auth.config, "/rest/v1/business_owners?select=organization_id,user_id,confirmed_by,confirmed_at,organizations(name)&order=confirmed_at.desc&limit=500", { token: auth.token });
+      if (!result.ok) return send(res, result.status, { error: "Не удалось загрузить список подтверждённых владельцев.", code: "owners_unavailable" });
+      return send(res, 200, { items: result.data || [] });
+    }
+    if (action === "statistics") {
+      const organizationId = String(req.query?.organizationId || "");
+      if (!/^[a-zA-Z0-9:_-]{2,100}$/.test(organizationId)) return send(res, 400, { error: "Укажите ID организации.", code: "invalid_organization" });
+      const result = await rest(auth.config, "/rest/v1/rpc/business_analytics_summary", { method: "POST", token: auth.token, body: { p_organization_id: organizationId } });
+      if (!result.ok) return send(res, result.status, { error: "Не удалось загрузить статистику организации.", code: "statistics_unavailable" });
+      return send(res, 200, { summary: result.data });
+    }
     return send(res, 400, { error: "Неизвестный раздел панели.", code: "unknown_action" });
   }
 
@@ -134,13 +170,68 @@ module.exports = async function admin(req, res) {
   }
   if (!isAdmin) return send(res, 403, { error: "Это действие доступно только администраторам.", code: "forbidden" });
 
+  if (action === "report-review") {
+    if (typeof body.reportId !== "string" || !/^[0-9a-f-]{36}$/i.test(body.reportId) || !["reviewing", "resolved", "rejected"].includes(body.status) || (body.note != null && (typeof body.note !== "string" || body.note.length > 1000))) return send(res, 400, { error: "Проверьте статус жалобы и комментарий.", code: "invalid_report_review" });
+    const result = await rest(auth.config, "/rest/v1/rpc/review_organization_report", { method: "POST", token: auth.token, body: { p_report_id: body.reportId, p_status: body.status, p_note: body.note || "" } });
+    if (!result.ok) return send(res, result.status, { error: "Не удалось обновить статус жалобы.", code: "report_review_failed" });
+    return send(res, 200, { updated: true });
+  }
+  if (action === "badge-save") {
+    const types = new Set(["verified", "popular", "new", "top", "open_24_7", "offer"]);
+    if (typeof body.organizationId !== "string" || !validId(body.organizationId) || !types.has(body.badgeType) || typeof body.source !== "string" || body.source.trim().length < 2 || body.source.length > 300) return send(res, 400, { error: "Укажите организацию, тип метки и основание.", code: "invalid_badge" });
+    const expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
+    if (body.expiresAt && (!Number.isFinite(expiresAt.getTime()) || expiresAt <= new Date())) return send(res, 400, { error: "Дата окончания метки должна быть в будущем.", code: "invalid_badge_expiry" });
+    const result = await rest(auth.config, "/rest/v1/organization_badges?on_conflict=organization_id,badge_type", { method: "POST", token: auth.token, body: { organization_id: body.organizationId, badge_type: body.badgeType, source: body.source.trim(), expires_at: expiresAt?.toISOString() || null, assigned_by: auth.user.id }, prefer: "resolution=merge-duplicates,return=representation" });
+    if (!result.ok) return send(res, result.status, { error: "Метка не сохранена.", code: "badge_save_failed" });
+    return send(res, 200, { item: Array.isArray(result.data) ? result.data[0] : result.data });
+  }
+  if (action === "badge-delete") {
+    if (typeof body.organizationId !== "string" || !validId(body.organizationId) || typeof body.badgeType !== "string") return send(res, 400, { error: "Недопустимая метка.", code: "invalid_badge" });
+    const result = await rest(auth.config, `/rest/v1/organization_badges?organization_id=eq.${encodeURIComponent(body.organizationId)}&badge_type=eq.${encodeURIComponent(body.badgeType)}`, { method: "DELETE", token: auth.token });
+    if (!result.ok) return send(res, result.status, { error: "Метка не удалена.", code: "badge_delete_failed" });
+    return send(res, 200, { deleted: true });
+  }
+  if (action === "campaign-save") {
+    const required = ["name", "placement", "image_url", "destination_url", "starts_at", "ends_at", "status"];
+    if (required.some((field) => typeof body[field] !== "string" || !body[field].trim()) || !["home_banner", "search", "category", "business"].includes(body.placement) || !["draft", "active", "paused", "archived"].includes(body.status) || !validHttpsUrl(body.image_url) || !validHttpsUrl(body.destination_url) || body.name.trim().length > 160 || body.image_url.length > 500 || body.destination_url.length > 500 || (body.city != null && (typeof body.city !== "string" || body.city.length > 80)) || (body.category_id != null && body.category_id !== "" && !/^[a-z0-9-]{2,60}$/.test(body.category_id)) || (body.organization_id != null && body.organization_id !== "" && !validId(body.organization_id))) return send(res, 400, { error: "Проверьте обязательные поля рекламной кампании, ограничения и HTTPS-ссылки.", code: "invalid_campaign" });
+    const start = new Date(body.starts_at), end = new Date(body.ends_at);
+    if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return send(res, 400, { error: "Укажите корректный период кампании.", code: "invalid_campaign_dates" });
+    const payload = { name: body.name.trim(), placement: body.placement, image_url: new URL(body.image_url).href, destination_url: new URL(body.destination_url).href, starts_at: start.toISOString(), ends_at: end.toISOString(), status: body.status, organization_id: body.organization_id || null, city: body.city || null, category_id: body.category_id || null };
+    if (body.id && !/^[0-9a-f-]{36}$/i.test(body.id)) return send(res, 400, { error: "Недопустимый ID кампании.", code: "invalid_campaign_id" });
+    if (!body.id) payload.created_by = auth.user.id;
+    const url = body.id ? `/rest/v1/ad_campaigns?id=eq.${encodeURIComponent(body.id)}` : "/rest/v1/ad_campaigns";
+    const result = await rest(auth.config, url, { method: body.id ? "PATCH" : "POST", token: auth.token, body: payload, prefer: "return=representation" });
+    if (!result.ok) return send(res, result.status, { error: "Кампания не сохранена.", code: "campaign_save_failed" });
+    return send(res, 200, { item: Array.isArray(result.data) ? result.data[0] : result.data });
+  }
+  if (action === "campaign-delete") {
+    if (typeof body.id !== "string" || !/^[0-9a-f-]{36}$/i.test(body.id)) return send(res, 400, { error: "Недопустимый ID кампании.", code: "invalid_campaign_id" });
+    const result = await rest(auth.config, `/rest/v1/ad_campaigns?id=eq.${encodeURIComponent(body.id)}`, { method: "DELETE", token: auth.token });
+    if (!result.ok) return send(res, result.status, { error: "Кампания не удалена.", code: "campaign_delete_failed" });
+    return send(res, 200, { deleted: true });
+  }
+  if (action === "owner-assign") {
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (typeof body.organizationId !== "string" || !validId(body.organizationId) || typeof body.userId !== "string" || !uuid.test(body.userId)) return send(res, 400, { error: "Укажите корректные ID организации и пользователя.", code: "invalid_owner" });
+    const result = await rest(auth.config, "/rest/v1/business_owners", { method: "POST", token: auth.token, body: { organization_id: body.organizationId, user_id: body.userId, confirmed_by: auth.user.id }, prefer: "return=representation" });
+    if (!result.ok && result.data?.code === "23505") return send(res, 409, { error: "Этот владелец уже подтверждён для организации.", code: "owner_already_assigned" });
+    if (!result.ok) return send(res, result.status, { error: "Владелец не назначен. Проверьте ID и подтверждение личности.", code: "owner_assign_failed" });
+    return send(res, 200, { assigned: true });
+  }
+  if (action === "owner-remove") {
+    if (typeof body.organizationId !== "string" || !validId(body.organizationId) || typeof body.userId !== "string" || !/^[0-9a-f-]{36}$/i.test(body.userId)) return send(res, 400, { error: "Укажите корректные ID организации и пользователя.", code: "invalid_owner" });
+    const result = await rest(auth.config, `/rest/v1/business_owners?organization_id=eq.${encodeURIComponent(body.organizationId)}&user_id=eq.${encodeURIComponent(body.userId)}`, { method: "DELETE", token: auth.token });
+    if (!result.ok) return send(res, result.status, { error: "Подтверждение владельца не удалено.", code: "owner_remove_failed" });
+    return send(res, 200, { removed: true });
+  }
+
   if (action === "organization-update") {
     if (typeof body.id !== "string" || !/^[a-zA-Z0-9:_-]{2,100}$/.test(body.id)) return send(res, 400, { error: "Недопустимый идентификатор организации.", code: "invalid_organization" });
-    const fields = ["name", "category_id", "city", "region", "address", "lat", "lon", "phone", "website", "photo", "hours", "rating", "rating_source", "source"];
+    const fields = ["name", "category_id", "city", "region", "address", "lat", "lon", "phone", "website", "photo", "hours", "rating", "rating_source", "source", "description", "price_summary", "services"];
     const payload = {};
     for (const field of fields) if (Object.hasOwn(body, field)) payload[field] = body[field];
     if (typeof payload.name !== "string" || payload.name.trim().length < 2 || payload.name.trim().length > 160 || typeof payload.city !== "string" || !payload.city.trim() || typeof payload.address !== "string" || !payload.address.trim() || typeof payload.category_id !== "string" || typeof payload.source !== "string" || !payload.source.trim()) return send(res, 400, { error: "Название, категория, город, адрес и источник обязательны.", code: "invalid_organization" });
-    const textLimits = { city: 80, region: 100, address: 240, phone: 60, website: 500, photo: 500, hours: 240, rating_source: 160, source: 500 };
+    const textLimits = { city: 80, region: 100, address: 240, phone: 60, website: 500, photo: 500, hours: 240, rating_source: 160, source: 500, description: 4000, price_summary: 500 };
     for (const [field, max] of Object.entries(textLimits)) {
       if (payload[field] != null && (typeof payload[field] !== "string" || payload[field].trim().length > max)) return send(res, 400, { error: `Проверьте поле ${field}.`, code: "invalid_organization_field" });
       if (typeof payload[field] === "string") payload[field] = payload[field].trim() || null;
@@ -154,6 +245,7 @@ module.exports = async function admin(req, res) {
     if (rating !== null && (!Number.isFinite(rating) || rating < 0 || rating > 9.99)) return send(res, 400, { error: "Укажите рейтинг от 0 до 9.99.", code: "invalid_rating" });
     payload.rating = rating;
     if (rating !== null && !payload.rating_source) return send(res, 400, { error: "Для рейтинга укажите источник.", code: "rating_source_required" });
+    if (payload.services !== undefined && (!Array.isArray(payload.services) || payload.services.length > 50 || payload.services.some((value) => typeof value !== "string" || value.trim().length > 100))) return send(res, 400, { error: "Услуги должны быть списком строк длиной до 100 символов.", code: "invalid_services" });
     for (const field of ["website", "photo"]) if (payload[field] && !validHttpsUrl(payload[field])) return send(res, 400, { error: "Сайт и фотография должны быть корректными HTTPS-ссылками.", code: "invalid_url" });
     const result = await rest(auth.config, `/rest/v1/organizations?id=eq.${encodeURIComponent(body.id)}`, { method: "PATCH", token: auth.token, body: payload, prefer: "return=representation" });
     if (!result.ok) return send(res, result.status, { error: "Изменение не сохранено. Проверьте категорию и данные.", code: "organization_update_failed" });

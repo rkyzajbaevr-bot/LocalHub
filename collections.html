@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Пользовательские подборки организаций LocalHub Kazakhstan.">
+  <title>Подборки — LocalHub Kazakhstan</title>
+  <link rel="stylesheet" href="style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <header class="nav"><div class="container nav__inner">
+    <a href="index.html" class="logo"><span class="logo__mark">⌖</span><span>Local<b>Hub</b><small>KAZAKHSTAN</small></span></a>
+    <nav class="nav__links" id="navLinks"><a href="index.html">Каталог</a><a href="map.html">Карта</a><a href="categories.html">Категории</a><a href="account.html">Кабинет</a><a href="login.html" id="authNav">Войти</a><a href="add.html">Добавить организацию</a></nav>
+    <button class="burger" id="burger" aria-label="Открыть меню" aria-expanded="false"><span></span><span></span><span></span></button>
+  </div></header>
+  <main class="container account-page">
+    <div class="section-kicker">ВАШИ ПОДБОРКИ</div><h1>Подборки организаций</h1>
+    <p class="muted account-intro" id="collectionIntro">Создавайте списки любимых мест и делитесь публичными подборками.</p>
+    <div id="collectionStatus" class="auth-status" role="status" aria-live="polite" hidden></div>
+    <section id="collectionGuest" class="account-empty muted">Войдите, чтобы создавать подборки. <a href="login.html">Войти или зарегистрироваться</a></section>
+    <section id="collectionWorkspace" hidden>
+      <form id="collectionForm" class="account-panel admin-category-form">
+        <label class="field"><span>Название</span><input name="name" maxlength="100" required></label>
+        <label class="field"><span>Описание</span><input name="description" maxlength="1000"></label>
+        <label class="setting-toggle"><span><b>Публичная подборка</b><small>Любой посетитель сможет открыть ссылку</small></span><input type="checkbox" name="is_public"></label>
+        <button class="btn" type="submit">Создать подборку</button>
+      </form>
+      <div id="collectionList" class="saved-search-list"></div>
+      <div id="collectionEmpty" class="account-empty muted" hidden>Подборок пока нет.</div>
+    </section>
+    <section id="publicCollection" hidden><div id="publicCollectionItems" class="grid"></div></section>
+  </main>
+  <footer class="footer"><div class="container footer__inner"><a href="index.html" class="logo">Local<b>Hub</b></a><nav class="footer__links"><a href="index.html">Каталог</a><a href="compare.html">Сравнение</a><a href="account.html">Кабинет</a></nav></div></footer>
+  <script src="script.js"></script><script src="collections.js"></script><script src="auth.js"></script>
+<script src="i18n.js"></script></body>
+</html>

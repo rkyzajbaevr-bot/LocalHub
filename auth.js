@@ -204,7 +204,13 @@
       return client.from("search_history").insert({ user_id: currentUser.id, search_params: searchParams });
     },
     async recordView(organizationId) {
-      if (!client || !currentUser || !organizationId) return { error: null };
+      if (!organizationId) return { error: null };
+      try {
+        let sessionId = localStorage.getItem("localhub:analytics-session");
+        if (!sessionId) { sessionId = crypto.randomUUID(); localStorage.setItem("localhub:analytics-session", sessionId); }
+        fetch("/api/analytics", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ organizationId: String(organizationId), action: "view", sessionId }) }).catch(() => {});
+      } catch {}
+      if (!client || !currentUser) return { error: null };
       return client.from("search_history").insert({ user_id: currentUser.id, search_params: { type: "view" }, organization_id: organizationId });
     },
     async history() {
@@ -217,7 +223,27 @@
     },
     async organizations() {
       if (!client) return { data: null, error: new Error("Supabase не настроен.") };
-      return client.from("organizations").select("id,name,category_id,city,region,address,lat,lon,phone,website,photo,hours,rating,rating_source,source,updated_at").order("name").limit(500);
+      const core = "id,name,category_id,city,region,address,lat,lon,phone,website,photo,hours,rating,rating_source,source,updated_at";
+      let result = await client.from("organizations").select(`${core},description,price_summary,services`).order("name").limit(500);
+      if (result.error && ["42703", "PGRST204"].includes(result.error.code)) result = await client.from("organizations").select(core).order("name").limit(500);
+      if (result.error || !Array.isArray(result.data)) return result;
+      const badges = await client.from("organization_badges").select("organization_id,badge_type,source,starts_at,expires_at").lte("starts_at", new Date().toISOString()).or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`);
+      if (!badges.error) {
+        const byOrganization = new Map();
+        for (const badge of badges.data || []) { const list = byOrganization.get(badge.organization_id) || []; list.push(badge); byOrganization.set(badge.organization_id, list); }
+        for (const organization of result.data) organization.badges = byOrganization.get(organization.id) || [];
+      }
+      const now = new Date().toISOString();
+      const campaigns = await client.from("ad_campaigns").select("organization_id,name,city,category_id").eq("status", "active").lte("starts_at", now).gt("ends_at", now).not("organization_id", "is", null);
+      if (!campaigns.error) {
+        const advertised = new Map();
+        for (const campaign of campaigns.data || []) { const list = advertised.get(campaign.organization_id) || []; list.push(campaign); advertised.set(campaign.organization_id, list); }
+        for (const organization of result.data) {
+          const campaign = (advertised.get(organization.id) || []).find((item) => (!item.city || item.city === organization.city) && (!item.category_id || item.category_id === organization.category_id));
+          if (campaign) { organization.activeAd = true; organization.adName = campaign.name; }
+        }
+      }
+      return result;
     },
     async categories() {
       if (!client) return { data: null, error: new Error("Supabase не настроен.") };
