@@ -223,7 +223,10 @@ module.exports = async function admin(req, res) {
     const payload = { name: body.name.trim(), placement: body.placement, image_url: new URL(body.image_url).href, destination_url: new URL(body.destination_url).href, starts_at: start.toISOString(), ends_at: end.toISOString(), status: body.status, organization_id: body.organization_id || null, city: body.city || null, category_id: body.category_id || null };
     if (body.id && !/^[0-9a-f-]{36}$/i.test(body.id)) return send(res, 400, { error: "Недопустимый ID кампании.", code: "invalid_campaign_id" });
     if (!body.id) payload.created_by = auth.user.id;
-    const url = body.id ? `/rest/v1/ad_campaigns?id=eq.${encodeURIComponent(body.id)}` : "/rest/v1/ad_campaigns";
+    const campaignColumns = "id,name,organization_id,placement,image_url,destination_url,city,category_id,starts_at,ends_at,status,created_at";
+    const url = body.id
+      ? `/rest/v1/ad_campaigns?id=eq.${encodeURIComponent(body.id)}&select=${campaignColumns}`
+      : `/rest/v1/ad_campaigns?select=${campaignColumns}`;
     const result = await rest(auth.config, url, { method: body.id ? "PATCH" : "POST", token: auth.token, body: payload, prefer: "return=representation" });
     if (!result.ok) return send(res, result.status, { error: "Кампания не сохранена.", code: "campaign_save_failed" });
     return send(res, 200, { item: Array.isArray(result.data) ? result.data[0] : result.data });

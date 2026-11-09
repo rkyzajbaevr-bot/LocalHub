@@ -321,8 +321,13 @@
         for (const badge of badges.data || []) { const list = byOrganization.get(badge.organization_id) || []; list.push(badge); byOrganization.set(badge.organization_id, list); }
         for (const organization of result.data) organization.badges = byOrganization.get(organization.id) || [];
       }
-      const now = new Date().toISOString();
-      const campaigns = await client.from("ad_campaigns").select("organization_id,name,city,category_id").eq("status", "active").lte("starts_at", now).gt("ends_at", now).not("organization_id", "is", null);
+      let campaigns = { data: [], error: null };
+      try {
+        const response = await fetch("/api/ads?placement=catalog", { headers: { Accept: "application/json" } });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error("Campaign catalog unavailable");
+        campaigns.data = Array.isArray(data.items) ? data.items : [];
+      } catch { campaigns.error = new Error("Campaign catalog unavailable"); }
       if (!campaigns.error) {
         const advertised = new Map();
         for (const campaign of campaigns.data || []) { const list = advertised.get(campaign.organization_id) || []; list.push(campaign); advertised.set(campaign.organization_id, list); }

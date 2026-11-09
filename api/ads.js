@@ -31,8 +31,11 @@ module.exports = async function ads(req, res) {
   const config = getConfig();
   if (req.method === "GET") {
     const placement = String(req.query?.placement || "home_banner");
-    if (!["home_banner", "search", "category", "business"].includes(placement)) return send(res, 400, { error: "Недопустимый тип размещения.", code: "invalid_placement" });
-    const result = await rest(config, `/rest/v1/ad_campaigns?select=id,name,organization_id,placement,image_url,destination_url,city,category_id,starts_at,ends_at&placement=eq.${encodeURIComponent(placement)}&status=eq.active&starts_at=lte.${encodeURIComponent(new Date().toISOString())}&ends_at=gt.${encodeURIComponent(new Date().toISOString())}&order=created_at.desc&limit=10`);
+    const catalog = placement === "catalog";
+    if (!catalog && !["home_banner", "search", "category", "business"].includes(placement)) return send(res, 400, { error: "Недопустимый тип размещения.", code: "invalid_placement" });
+    const filters = catalog ? "organization_id=not.is.null&" : `placement=eq.${encodeURIComponent(placement)}&`;
+    const limit = catalog ? 1000 : 10;
+    const result = await rest(config, `/rest/v1/ad_campaigns?select=id,name,organization_id,placement,image_url,destination_url,city,category_id,starts_at,ends_at&${filters}status=eq.active&starts_at=lte.${encodeURIComponent(new Date().toISOString())}&ends_at=gt.${encodeURIComponent(new Date().toISOString())}&order=created_at.desc&limit=${limit}`);
     if (!result.ok) return send(res, result.status, { error: "Рекламные блоки пока недоступны.", code: "ads_unavailable" });
     return send(res, 200, { items: result.data || [] });
   }

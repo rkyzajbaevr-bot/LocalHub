@@ -1,5 +1,3 @@
-begin;
-
 -- The viewport API filters by coordinate bounds; keep those reads index-backed.
 create index if not exists organizations_coordinates_idx
   on public.organizations (lat, lon)
@@ -60,7 +58,7 @@ begin
       join public.organizations o on o.id = p.organization_id), '[]'::jsonb),
     'activity', coalesce((select jsonb_agg(jsonb_build_object('day', d.day::date, 'views', coalesce(a.views, 0), 'visitors', coalesce(a.visitors, 0)) order by d.day)
       from generate_series(date_trunc('day', now()) - interval '29 days', date_trunc('day', now()), interval '1 day') d(day)
-      left join (select date_trunc('day', created_at) day, count(*) views, count(distinct visitor_hash) visitors
+      left join (select date_trunc('day', created_at) AS day, count(*) views, count(distinct visitor_hash) visitors
         from public.site_analytics_events where created_at >= now() - interval '30 days' group by 1) a on a.day = d.day), '[]'::jsonb)
   ) into result from public.site_analytics_events;
   return coalesce(result, '{}'::jsonb);
@@ -102,11 +100,12 @@ create table public.organization_verification_requests (
 create unique index organization_verification_one_pending_idx on public.organization_verification_requests(organization_id) where status = 'pending';
 alter table public.organization_verification_requests enable row level security;
 revoke all on public.organization_verification_requests from public, anon, authenticated, service_role;
-grant select, insert on public.organization_verification_requests to authenticated;
+grant select on public.organization_verification_requests to authenticated;
+grant insert (organization_id, user_id, evidence_url) on public.organization_verification_requests to authenticated;
 create policy organization_verification_read_owner_admin on public.organization_verification_requests for select to authenticated
   using (user_id = (select auth.uid()) or public.is_admin());
 create policy organization_verification_insert_user on public.organization_verification_requests for insert to authenticated
-  with check (user_id = (select auth.uid()) and status = 'pending' and reviewed_by is null and reviewed_at is null and exists (
+  with check (user_id = (select auth.uid()) and status = 'pending' and review_note is null and reviewed_by is null and reviewed_at is null and exists (
     select 1 from public.business_owners bo where bo.organization_id = organization_verification_requests.organization_id and bo.user_id = (select auth.uid())
   ));
 
@@ -192,10 +191,11 @@ create table public.business_claim_requests (
 create unique index business_claim_one_pending_idx on public.business_claim_requests(organization_id, user_id) where status = 'pending';
 alter table public.business_claim_requests enable row level security;
 revoke all on public.business_claim_requests from public, anon, authenticated, service_role;
-grant select, insert on public.business_claim_requests to authenticated;
+grant select on public.business_claim_requests to authenticated;
+grant insert (organization_id, user_id, contact_name, contact_phone, evidence_url) on public.business_claim_requests to authenticated;
 create policy business_claim_read_owner_admin on public.business_claim_requests for select to authenticated using (user_id = (select auth.uid()) or public.is_admin());
 create policy business_claim_insert_self on public.business_claim_requests for insert to authenticated
-  with check (user_id = (select auth.uid()) and status = 'pending' and reviewed_by is null and reviewed_at is null);
+  with check (user_id = (select auth.uid()) and status = 'pending' and review_note is null and reviewed_by is null and reviewed_at is null);
 
 create or replace function public.review_business_claim_request(p_request_id uuid, p_decision text, p_note text default null)
 returns boolean language plpgsql security definer set search_path = '' as $$
@@ -218,5 +218,3 @@ end;
 $$;
 revoke all on function public.review_business_claim_request(uuid, text, text) from public, anon, authenticated, service_role;
 grant execute on function public.review_business_claim_request(uuid, text, text) to authenticated;
-
-commit;

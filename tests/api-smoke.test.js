@@ -263,6 +263,41 @@ test("admin API ignores stale admin token metadata when the live database role i
   } finally { global.fetch = previous; }
 });
 
+test("admin campaign list remains compatible with the current table API", async () => {
+  const handler = require("../api/admin");
+  const previous = global.fetch;
+  const paths = [];
+  global.fetch = async (url) => {
+    const target = String(url); paths.push(target);
+    if (target.endsWith("/auth/v1/user")) return restResponse({ id: "admin-user" });
+    if (target.endsWith("/rest/v1/rpc/current_app_role")) return restResponse("admin");
+    if (target.includes("/rest/v1/ad_campaigns?select=*&order=created_at.desc")) return restResponse([{ id: "campaign-1", impressions: 12, clicks: 3 }]);
+    throw new Error(`Unexpected API call: ${target}`);
+  };
+  try {
+    const res = await apiRequest(handler, { action: "campaigns" }, "GET", undefined, { authorization: "Bearer admin-token" });
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.payload.items[0].impressions, 12);
+    assert.ok(paths.some((url) => url.includes("/rest/v1/ad_campaigns?select=*&order=created_at.desc")));
+  } finally { global.fetch = previous; }
+});
+
+test("campaign catalog endpoint reads only active, public-safe organization fields", async () => {
+  const handler = require("../api/ads");
+  const previous = global.fetch;
+  let requested = "";
+  global.fetch = async (url) => { requested = String(url); return restResponse([{ organization_id: "org-1", name: "Campaign", city: "Алматы", category_id: "restaurant" }]); };
+  try {
+    const res = await apiRequest(handler, { placement: "catalog" });
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.payload.items.length, 1);
+    assert.match(requested, /organization_id=not\.is\.null/);
+    assert.match(requested, /status=eq\.active/);
+    assert.match(requested, /select=id,name,organization_id,placement/);
+    assert.doesNotMatch(requested, /impressions|clicks|created_by/);
+  } finally { global.fetch = previous; }
+});
+
 test("assistant returns only database search results, never model-supplied organizations", async () => {
   const handler = require("../api/assistant");
   process.env.OPENAI_API_KEY = "test-openai-key";
