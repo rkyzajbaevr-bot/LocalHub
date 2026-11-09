@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="AI-помощник LocalHub ищет организации в реальном каталоге Казахстана.">
+  <title>AI-помощник — LocalHub Kazakhstan</title>
+  <link rel="stylesheet" href="style.css"><link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <header class="nav"><div class="container nav__inner"><a href="index.html" class="logo"><span class="logo__mark">⌖</span><span>Local<b>Hub</b><small>KAZAKHSTAN</small></span></a><nav class="nav__links" id="navLinks"><a href="index.html">Каталог</a><a href="map.html">Карта</a><a href="account.html">Кабинет</a><a href="assistant.html" aria-current="page">AI-помощник</a><a href="login.html" id="authNav">Войти</a></nav><button class="burger" id="burger" aria-label="Открыть меню" aria-expanded="false"><span></span><span></span><span></span></button></div></header>
+  <main class="container assistant-page">
+    <div class="section-kicker">ПОИСК ПО КАТАЛОГУ</div><h1>LocalHub AI</h1>
+    <p class="muted">Опишите, что ищете. Помощник подберёт фильтры и покажет только организации из каталога LocalHub.</p>
+    <section class="assistant-shell" aria-label="Чат с LocalHub AI">
+      <div class="assistant-messages" id="assistantMessages" aria-live="polite"></div>
+      <div class="assistant-status" id="assistantStatus" role="status" aria-live="polite" hidden></div>
+      <form id="assistantForm" class="assistant-form"><label class="visually-hidden" for="assistantInput">Ваш запрос</label><textarea id="assistantInput" maxlength="500" rows="2" placeholder="Например: Найди кафе в Актау" required></textarea><button class="btn" id="assistantSend" type="submit">Найти <span>→</span></button></form>
+      <div class="assistant-suggestions"><button type="button" data-assistant-prompt="Найди кафе в Актау">Кафе в Актау</button><button type="button" data-assistant-prompt="Покажи стоматологии в Актобе">Стоматологии в Актобе</button><button type="button" data-assistant-prompt="Где можно изучать английский в Алматы?">Курсы английского</button></div>
+    </section>
+    <p class="assistant-disclosure muted">Текст запроса отправляется AI-провайдеру для разбора. Организации, адреса и контакты берутся только из базы LocalHub.</p>
+  </main>
+  <footer class="footer"><div class="container footer__inner"><a href="index.html" class="logo"><span class="logo__mark">⌖</span><span>Local<b>Hub</b><small>KAZAKHSTAN</small></span></a><nav class="footer__links"><a href="index.html">Каталог</a><a href="map.html">Карта</a><a href="account.html">Кабинет</a></nav></div></footer>
+  <script src="assistant.js"></script><script src="auth.js"></script><script src="i18n.js"></script>
+</body>
+</html>

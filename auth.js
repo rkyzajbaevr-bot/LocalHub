@@ -51,9 +51,20 @@
     const favoritesNote = $("#favoritesStorageNote");
     if (favoritesNote) favoritesNote.textContent = user ? "Избранное для аккаунта хранится в базе данных." : "Гостевое избранное хранится локально; после входа синхронизируется с базой.";
     const clearHistory = $("clearHistoryButton");
-    if (clearHistory) clearHistory.hidden = !user;
+    if (clearHistory) clearHistory.hidden = false;
+    if (!user) renderGuestHistory();
     const searchesNote = $("#savedSearchStorageNote");
     if (searchesNote) searchesNote.textContent = user ? "Сохранённые поиски для аккаунта хранятся в базе данных." : "Гостевые поиски локальные; в аккаунте сохраняются в базе данных.";
+  }
+
+  function renderGuestHistory() {
+    const target = $("#accountHistory"), empty = $("#accountHistoryEmpty");
+    if (!target || !empty) return;
+    let rows = [];
+    try { rows = JSON.parse(localStorage.getItem("localhub:guest-history") || "[]"); if (!Array.isArray(rows)) rows = []; } catch {}
+    target.innerHTML = rows.map((item) => `<article class="history-item"><div><b><a href="business.html?id=${encodeURIComponent(item.id)}">${escapeHtml(item.name || "Организация")}</a></b><small>${escapeHtml([item.city, item.address].filter(Boolean).join(" · "))}</small></div><time>${escapeHtml(new Date(item.viewedAt).toLocaleString("ru-RU"))}</time><button type="button" class="btn btn--ghost" data-guest-history-remove="${escapeHtml(item.id)}">Удалить</button></article>`).join("");
+    empty.hidden = rows.length > 0;
+    if (!rows.length) say(empty, "Недавно просмотренные организации появятся здесь.");
   }
 
   function setFormsEnabled(enabled) {
@@ -74,6 +85,21 @@
       script.onerror = () => reject(new Error("Не удалось загрузить библиотеку Supabase. Проверьте подключение к интернету."));
       document.head.append(script);
     });
+  }
+
+  function recordPageView() {
+    try {
+      const now = Date.now();
+      let visitorId = localStorage.getItem("localhub:site-visitor");
+      if (!/^[0-9a-f-]{36}$/i.test(visitorId || "")) { visitorId = crypto.randomUUID(); localStorage.setItem("localhub:site-visitor", visitorId); }
+      let sessionId = sessionStorage.getItem("localhub:site-session");
+      const started = Number(sessionStorage.getItem("localhub:site-session-start")) || 0;
+      if (!/^[0-9a-f-]{36}$/i.test(sessionId || "") || now - started > 30 * 60 * 1000) {
+        sessionId = crypto.randomUUID(); sessionStorage.setItem("localhub:site-session", sessionId); sessionStorage.setItem("localhub:site-session-start", String(now));
+      }
+      const page = location.pathname.toLowerCase();
+      fetch("/api/site-analytics", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ page, visitorId, sessionId }), keepalive: true }).catch(() => {});
+    } catch {}
   }
 
   function clearPrivateUi() {
@@ -99,6 +125,9 @@
     }
     const favorites = $("#accountFavoriteList");
     if (favorites) favorites.replaceChildren();
+    const notifications = $("#notificationList"); if (notifications) notifications.replaceChildren();
+    const verification = $("#verificationPanel"); if (verification) verification.hidden = true;
+    const claims = $("#claimPanel"); if (claims) claims.hidden = true;
     for (const id of ["accountFavCount", "favCount"]) {
       const count = $("#" + id);
       if (count) count.textContent = "0";
@@ -142,6 +171,49 @@
       }
     }
     await loadAccountHistory(user, version);
+    await loadNotifications(user, version);
+    await loadVerificationOptions(user, version);
+    await loadBusinessClaimOptions(user, version);
+  }
+
+  async function loadBusinessClaimOptions(user, version) {
+    const panel = $("#claimPanel"), select = $("#claimOrganization"), list = $("#businessClaimList");
+    if (!panel || !client || !user) return;
+    panel.hidden = false;
+    const [orgResult, claimResult] = await Promise.all([
+      client.from("organizations").select("id,name,city").order("name").limit(1000),
+      client.from("business_claim_requests").select("id,organization_id,status,review_note,created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(50),
+    ]);
+    if (version !== sessionVersion || currentUser?.id !== user.id) return;
+    if (orgResult.error) { select.replaceChildren(new Option("Не удалось загрузить организации", "")); select.disabled = true; return; }
+    select.disabled = false;
+    select.replaceChildren(...(orgResult.data || []).map((org) => new Option(`${org.name} · ${org.city}`, org.id)));
+    if (list) list.innerHTML = (claimResult.data || []).map((row) => `<article class="history-item"><b>${escapeHtml(orgResult.data?.find((org) => org.id === row.organization_id)?.name || row.organization_id)}</b><span>${escapeHtml(row.status)} · ${escapeHtml(row.review_note || new Date(row.created_at).toLocaleDateString("ru-RU"))}</span></article>`).join("");
+  }
+
+  async function loadNotifications(user, version) {
+    const list = $("#notificationList");
+    if (!list || !client || !user) return;
+    const { data, error } = await client.from("user_notifications").select("id,notification_type,title,body,link,read_at,created_at").order("created_at", { ascending: false }).limit(100);
+    if (version !== sessionVersion || currentUser?.id !== user.id) return;
+    if (error) { list.textContent = "Не удалось загрузить уведомления."; return; }
+    list.innerHTML = (data || []).map((item) => `<article class="history-item ${item.read_at ? "" : "notification-unread"}"><div><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.body)}</small></div><time>${escapeHtml(new Date(item.created_at).toLocaleString("ru-RU"))}</time><div class="notification-actions">${item.link ? `<a class="btn btn--ghost" href="${escapeHtml(item.link)}">Открыть</a>` : ""}${item.read_at ? "" : `<button type="button" class="btn btn--ghost" data-notification-read="${escapeHtml(item.id)}">Прочитано</button>`}<button type="button" class="btn btn--ghost" data-notification-delete="${escapeHtml(item.id)}">Удалить</button></div></article>`).join("");
+    const empty = $("#notificationEmpty"); if (empty) { empty.hidden = !!data?.length; if (!data?.length) empty.textContent = "Новых уведомлений пока нет."; }
+    const unread = (data || []).filter((item) => !item.read_at).length;
+    const nav = document.querySelector('[data-notifications-count]'); if (nav) nav.textContent = String(unread);
+    const all = $("#notificationsReadAll"); if (all) all.hidden = !unread;
+  }
+
+  async function loadVerificationOptions(user, version) {
+    const panel = $("#verificationPanel"), select = $("#verificationOrganization"), list = $("#verificationRequestList");
+    if (!panel || !client || !user) return;
+    const { data: owners, error } = await client.from("business_owners").select("organization_id,organizations(name)").eq("user_id", user.id);
+    if (version !== sessionVersion || currentUser?.id !== user.id) return;
+    if (error || !owners?.length) { panel.hidden = true; return; }
+    panel.hidden = false;
+    select.replaceChildren(...owners.map((row) => new Option(row.organizations?.name || row.organization_id, row.organization_id)));
+    const { data: requests } = await client.from("organization_verification_requests").select("organization_id,status,review_note,created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(20);
+    if (list) list.innerHTML = (requests || []).map((row) => `<article class="history-item"><b>${escapeHtml(owners.find((owner) => owner.organization_id === row.organization_id)?.organizations?.name || row.organization_id)}</b><span>${escapeHtml(row.status)} · ${escapeHtml(row.review_note || new Date(row.created_at).toLocaleDateString("ru-RU"))}</span></article>`).join("");
   }
 
   async function loadAccountHistory(user, version) {
@@ -158,7 +230,8 @@
     target.innerHTML = rows.map((item) => {
       const title = item.organizations?.name || (item.search_params?.type === "view" ? "Организация недоступна в каталоге" : "Поиск LocalHub");
       const details = item.organizations ? `${item.organizations.city || "Город не указан"} · ${item.organizations.category_id || "Категория не указана"}` : Object.entries(item.search_params || {}).map(([key, value]) => `${key}: ${value}`).join(" · ");
-      return `<article class="history-item"><div><b>${escapeHtml(title)}</b><small>${escapeHtml(details || "")}</small></div><time>${escapeHtml(new Date(item.created_at).toLocaleString("ru-RU"))}</time></article>`;
+      const view = item.search_params?.type === "view" && item.organization_id;
+      return `<article class="history-item"><div><b>${item.organizations?.id ? `<a href="business.html?id=${encodeURIComponent(item.organizations.id)}">${escapeHtml(title)}</a>` : escapeHtml(title)}</b><small>${escapeHtml(details || "")}</small></div><time>${escapeHtml(new Date(item.created_at).toLocaleString("ru-RU"))}</time>${view ? `<button type="button" class="btn btn--ghost" data-history-remove="${escapeHtml(item.id)}">Удалить</button>` : ""}</article>`;
     }).join("");
     empty.hidden = rows.length > 0;
     if (!rows.length) say(empty, "История пока пуста.");
@@ -203,15 +276,30 @@
       if (!client || !currentUser) return { error: null };
       return client.from("search_history").insert({ user_id: currentUser.id, search_params: searchParams });
     },
-    async recordView(organizationId) {
+    async recordView(organizationId, organization = null) {
       if (!organizationId) return { error: null };
+      if (organization) {
+        try {
+          const signalKey = scopedKey("localhub:recommendation-signals", currentUser?.id || "guest");
+          const signals = JSON.parse(localStorage.getItem(signalKey) || "[]");
+          localStorage.setItem(signalKey, JSON.stringify([{ id: String(organizationId), category: organization.category || organization.category_id || "", city: organization.city || "", viewedAt: new Date().toISOString() }, ...(Array.isArray(signals) ? signals.filter((item) => String(item.id) !== String(organizationId)) : [])].slice(0, 30)));
+        } catch {}
+      }
+      if (!currentUser && organization) {
+        try {
+          const rows = JSON.parse(localStorage.getItem("localhub:guest-history") || "[]");
+          const next = [{ id: String(organizationId), name: organization.name, city: organization.city, address: organization.address, viewedAt: new Date().toISOString() }, ...(Array.isArray(rows) ? rows.filter((item) => String(item.id) !== String(organizationId)) : [])].slice(0, 100);
+          localStorage.setItem("localhub:guest-history", JSON.stringify(next));
+          renderGuestHistory();
+        } catch {}
+      }
       try {
         let sessionId = localStorage.getItem("localhub:analytics-session");
         if (!sessionId) { sessionId = crypto.randomUUID(); localStorage.setItem("localhub:analytics-session", sessionId); }
         fetch("/api/analytics", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ organizationId: String(organizationId), action: "view", sessionId }) }).catch(() => {});
       } catch {}
       if (!client || !currentUser) return { error: null };
-      return client.from("search_history").insert({ user_id: currentUser.id, search_params: { type: "view" }, organization_id: organizationId });
+      return client.rpc("record_organization_view", { p_organization_id: String(organizationId) });
     },
     async history() {
       if (!client || !currentUser) return { data: null, error: new Error("Требуется вход в аккаунт.") };
@@ -223,7 +311,7 @@
     },
     async organizations() {
       if (!client) return { data: null, error: new Error("Supabase не настроен.") };
-      const core = "id,name,category_id,city,region,address,lat,lon,phone,website,photo,hours,rating,rating_source,source,updated_at";
+      const core = "id,name,category_id,city,region,address,lat,lon,phone,website,photo,hours,rating,rating_source,source,published_at,updated_at";
       let result = await client.from("organizations").select(`${core},description,price_summary,services`).order("name").limit(500);
       if (result.error && ["42703", "PGRST204"].includes(result.error.code)) result = await client.from("organizations").select(core).order("name").limit(500);
       if (result.error || !Array.isArray(result.data)) return result;
@@ -400,5 +488,59 @@
     if (!error && configStatus) configStatus.hidden = true;
   }
 
+  $("#accountHistory")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-guest-history-remove]");
+    if (!button || currentUser) return;
+    try {
+      const rows = JSON.parse(localStorage.getItem("localhub:guest-history") || "[]");
+      localStorage.setItem("localhub:guest-history", JSON.stringify((Array.isArray(rows) ? rows : []).filter((item) => String(item.id) !== button.dataset.guestHistoryRemove)));
+      renderGuestHistory();
+    } catch {}
+  });
+  $("#accountHistory")?.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-history-remove]");
+    if (!button || !client || !currentUser) return;
+    const { error } = await client.from("search_history").delete().eq("id", button.dataset.historyRemove).eq("user_id", currentUser.id);
+    if (!error) await loadAccountHistory(currentUser, sessionVersion);
+  });
+  $("#notificationList")?.addEventListener("click", async (event) => {
+    if (!client || !currentUser) return;
+    const read = event.target.closest("[data-notification-read]"), remove = event.target.closest("[data-notification-delete]");
+    const id = read?.dataset.notificationRead || remove?.dataset.notificationDelete;
+    if (!id) return;
+    const query = client.from("user_notifications");
+    const result = read ? await query.update({ read_at: new Date().toISOString() }).eq("id", id).eq("user_id", currentUser.id) : await query.delete().eq("id", id).eq("user_id", currentUser.id);
+    if (result.error) return;
+    await loadNotifications(currentUser, sessionVersion);
+  });
+  $("#notificationsReadAll")?.addEventListener("click", async () => {
+    if (!client || !currentUser) return;
+    await client.from("user_notifications").update({ read_at: new Date().toISOString() }).eq("user_id", currentUser.id).is("read_at", null);
+    await loadNotifications(currentUser, sessionVersion);
+  });
+  $("#verificationRequestForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget, status = $("#verificationRequestStatus");
+    if (!client || !currentUser) return say(status, "Войдите в аккаунт.", true);
+    const organizationId = form.elements.namedItem("organizationId").value;
+    const evidenceUrl = form.elements.namedItem("evidenceUrl").value.trim();
+    try { const url = new URL(evidenceUrl); if (url.protocol !== "https:") throw new Error(); } catch { return say(status, "Укажите корректную HTTPS-ссылку на подтверждающие материалы.", true); }
+    const { error } = await client.from("organization_verification_requests").insert({ organization_id: organizationId, user_id: currentUser.id, evidence_url: evidenceUrl });
+    if (error) return say(status, error.code === "23505" ? "Для этой организации уже есть заявка на рассмотрении." : "Заявку не удалось отправить. Проверьте права владельца.", true);
+    say(status, "Заявка отправлена на проверку.");
+    loadVerificationOptions(currentUser, sessionVersion).catch(() => {});
+  });
+  $("#businessClaimForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget, status = $("#businessClaimStatus");
+    if (!client || !currentUser) return say(status, "Войдите в аккаунт.", true);
+    const values = Object.fromEntries(new FormData(form));
+    try { const url = new URL(values.evidenceUrl); if (url.protocol !== "https:") throw new Error(); } catch { return say(status, "Укажите корректную HTTPS-ссылку.", true); }
+    const { error } = await client.from("business_claim_requests").insert({ organization_id: values.organizationId, user_id: currentUser.id, contact_name: values.contactName.trim(), contact_phone: values.contactPhone.trim(), evidence_url: values.evidenceUrl.trim() });
+    if (error) return say(status, error.code === "23505" ? "Заявка для этой организации уже рассматривается." : "Не удалось отправить заявку.", true);
+    say(status, "Заявка отправлена. Права доступа появятся после проверки администратором.");
+    await loadBusinessClaimOptions(currentUser, sessionVersion);
+  });
+  recordPageView();
   initialize();
 })();

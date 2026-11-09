@@ -8,7 +8,7 @@ module.exports = async function catalog(req, res) {
   const search = String(req.query?.search || "").trim();
   const page = Math.max(1, Math.min(20, Number.parseInt(req.query?.page, 10) || 1));
   if (!CITIES.has(city) || (category && !CATEGORIES.has(category)) || search.length > 100) return send(res, 400, { error: "Недопустимый город, категория или поисковая фраза.", code: "invalid_catalog_filter" });
-  const core = "id,name,category_id,city,region,address,lat,lon,phone,website,photo,hours,rating,rating_source,source,updated_at";
+  const core = "id,name,category_id,city,region,address,lat,lon,phone,website,photo,hours,rating,rating_source,source,published_at,updated_at";
   const extra = ",description,price_summary,services";
   const escaped = search.replace(/\\/g, "\\\\").replace(/"/g, "\\\"").replace(/[%_*]/g, (value) => `\\${value}`);
   const textFilter = escaped ? `&or=${encodeURIComponent(`(name.ilike."*${escaped}*",address.ilike."*${escaped}*")`)}` : "";

@@ -1,5 +1,11 @@
 {
+  "scripts": {
+    "test": "node --test"
+  },
   "devDependencies": {
     "supabase": "^3.0.0"
+  },
+  "dependencies": {
+    "qrcode": "1.5.4"
   }
 }

@@ -69,6 +69,16 @@ module.exports = async function admin(req, res) {
   const isAdmin = liveRole.data === "admin";
 
   if (req.method === "GET") {
+    if (action === "verification-requests") {
+      const result = await rest(auth.config, "/rest/v1/organization_verification_requests?select=id,organization_id,user_id,evidence_url,status,created_at,organizations(name,city)&status=eq.pending&order=created_at.asc&limit=200", { token: auth.token });
+      if (!result.ok) return send(res, result.status, { error: "Не удалось загрузить заявки на верификацию.", code: "verification_requests_unavailable" });
+      return send(res, 200, { items: result.data || [] });
+    }
+    if (action === "business-claims") {
+      const result = await rest(auth.config, "/rest/v1/business_claim_requests?select=id,organization_id,user_id,contact_name,contact_phone,evidence_url,created_at,organizations(name,city,address)&status=eq.pending&order=created_at.asc&limit=200", { token: auth.token });
+      if (!result.ok) return send(res, result.status, { error: "Не удалось загрузить заявки владельцев.", code: "business_claims_unavailable" });
+      return send(res, 200, { items: result.data || [] });
+    }
     if (action === "dashboard") {
       if (!isAdmin) return send(res, 403, { error: "Панель статистики доступна администраторам.", code: "forbidden" });
       const result = await rest(auth.config, "/rest/v1/rpc/admin_dashboard_metrics", { method: "POST", token: auth.token, body: {} });
@@ -158,6 +168,20 @@ module.exports = async function admin(req, res) {
   }
 
   const body = inputBody(req);
+  if (action === "verification-review") {
+    if (typeof body.requestId !== "string" || !/^[0-9a-f-]{36}$/i.test(body.requestId) || !["approved", "rejected"].includes(body.decision) || (body.note != null && (typeof body.note !== "string" || body.note.length > 1000))) return send(res, 400, { error: "Проверьте решение заявки.", code: "invalid_verification_review" });
+    const result = await rest(auth.config, "/rest/v1/rpc/review_organization_verification", { method: "POST", token: auth.token, body: { p_request_id: body.requestId, p_decision: body.decision, p_note: body.note || null } });
+    if (!result.ok) return send(res, result.status, { error: "Не удалось сохранить решение по заявке.", code: "verification_review_failed" });
+    if (result.data !== true) return send(res, 409, { error: "Заявка уже рассмотрена или не найдена.", code: "verification_request_changed" });
+    return send(res, 200, { ok: true });
+  }
+  if (action === "business-claim-review") {
+    if (typeof body.requestId !== "string" || !/^[0-9a-f-]{36}$/i.test(body.requestId) || !["approved", "rejected"].includes(body.decision) || (body.note != null && (typeof body.note !== "string" || body.note.length > 1000))) return send(res, 400, { error: "Проверьте решение заявки.", code: "invalid_business_claim_review" });
+    const result = await rest(auth.config, "/rest/v1/rpc/review_business_claim_request", { method: "POST", token: auth.token, body: { p_request_id: body.requestId, p_decision: body.decision, p_note: body.note || null } });
+    if (!result.ok) return send(res, result.status, { error: "Не удалось сохранить решение по заявке.", code: "business_claim_review_failed" });
+    if (result.data !== true) return send(res, 409, { error: "Заявка уже рассмотрена или не найдена.", code: "business_claim_changed" });
+    return send(res, 200, { ok: true });
+  }
   if (action === "review") {
     if (!validId(body.submissionId) || !['approved', 'rejected'].includes(body.decision)) return send(res, 400, { error: "Проверьте решение и идентификатор предложения.", code: "invalid_review" });
     if (body.decision === "rejected" && (typeof body.reason !== "string" || !body.reason.trim() || body.reason.length > 1000)) return send(res, 400, { error: "Для отклонения укажите причину длиной до 1000 символов.", code: "invalid_reason" });

@@ -94,6 +94,14 @@
     const { items } = await request("owners");
     renderRows($("ownerRows"), items || [], (item) => `<tr><td>${esc(item.organizations?.name || item.organization_id)}</td><td>${esc(item.organization_id)}</td><td>${esc(item.user_id)}</td><td>${esc(new Date(item.confirmed_at).toLocaleString("ru-RU"))}</td><td><button class="btn btn--ghost" type="button" data-owner-remove="${esc(item.organization_id)}" data-user-id="${esc(item.user_id)}">Отозвать</button></td></tr>`);
   }
+  async function loadVerificationRequests() {
+    const { items } = await request("verification-requests");
+    renderRows($("verificationRows"), items || [], (item) => `<tr><td><b>${esc(item.organizations?.name || item.organization_id)}</b><small>${esc(item.organizations?.city || "")}</small></td><td>${esc(item.user_id)}</td><td><a href="${esc(item.evidence_url)}" target="_blank" rel="noopener">Открыть материалы ↗</a></td><td>${esc(new Date(item.created_at).toLocaleString("ru-RU"))}</td><td><div class="admin-actions"><button type="button" class="btn" data-verification-decision="approved" data-request-id="${esc(item.id)}">Подтвердить</button><button type="button" class="btn btn--ghost" data-verification-decision="rejected" data-request-id="${esc(item.id)}">Отклонить</button></div></td></tr>`);
+  }
+  async function loadBusinessClaims() {
+    const { items } = await request("business-claims");
+    renderRows($("businessClaimRows"), items || [], (item) => `<tr><td><b>${esc(item.organizations?.name || item.organization_id)}</b><small>${esc(item.organizations?.city || "")} · ${esc(item.organizations?.address || "")}</small></td><td>${esc(item.contact_name)}<small>${esc(item.user_id)}</small></td><td>${esc(item.contact_phone)}</td><td><a href="${esc(item.evidence_url)}" target="_blank" rel="noopener">Открыть ↗</a></td><td>${esc(new Date(item.created_at).toLocaleString("ru-RU"))}</td><td><div class="admin-actions"><button type="button" class="btn" data-claim-decision="approved" data-request-id="${esc(item.id)}">Одобрить</button><button type="button" class="btn btn--ghost" data-claim-decision="rejected" data-request-id="${esc(item.id)}">Отклонить</button></div></td></tr>`);
+  }
   async function loadStatistics(organizationId) {
     const { summary } = await request("statistics", "GET", null, { organizationId });
     $("adminStatisticsMetrics").innerHTML = [["Сегодня", summary.today], ["7 дней", summary.days_7], ["30 дней", summary.days_30], ["За всё время", summary.all_time]].map(([label, value]) => `<article><span>${label}</span><b>${Number(value) || 0}</b></article>`).join("");
@@ -102,6 +110,25 @@
     const chart = $("adminStatisticsActivity");
     chart.innerHTML = activity.map((item) => `<span title="${esc(item.day)}: ${Number(item.count) || 0}" style="--bar:${Math.max(3, (Number(item.count) || 0) / maximum * 100)}%"></span>`).join("");
     chart.hidden = !activity.length;
+  }
+
+  async function loadSiteStatistics() {
+    const session = await window.LocalHubAuth.client.auth.getSession();
+    const token = session.data?.session?.access_token;
+    if (!token) throw new Error("Сессия истекла. Войдите снова.");
+    const response = await fetch("/api/site-analytics", { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "Не удалось загрузить статистику сайта.");
+    const summary = data.summary || {};
+    $("siteStatisticsMetrics").innerHTML = [["Просмотры сегодня", summary.today_views], ["Посещения сегодня", summary.today_visits], ["Уникальные браузеры сегодня", summary.today_visitors], ["Просмотры за 7 дней", summary.days_7_views], ["Посещения за 7 дней", summary.days_7_visits], ["Уникальные браузеры за 7 дней", summary.days_7_visitors], ["Просмотры за 30 дней", summary.days_30_views], ["Посещения за 30 дней", summary.days_30_visits], ["Уникальные браузеры за 30 дней", summary.days_30_visitors], ["Просмотры за всё время", summary.all_time_views]].map(([label, value]) => `<article><span>${label}</span><b>${Number(value) || 0}</b></article>`).join("");
+    const activity = Array.isArray(summary.activity) ? summary.activity : [], max = Math.max(1, ...activity.map((day) => Number(day.views) || 0));
+    const chart = $("siteStatisticsActivity");
+    chart.innerHTML = activity.map((day) => `<span title="${esc(day.day)}: ${Number(day.views) || 0} просмотров · ${Number(day.visitors) || 0} посетителей" style="--bar:${Math.max(3, (Number(day.views) || 0) / max * 100)}%"></span>`).join("");
+    chart.hidden = !activity.length;
+    renderRows($("sitePopularPages"), summary.popular_pages || [], (page) => `<tr><td>${esc(page.page)}</td><td>${Number(page.views) || 0}</td></tr>`);
+    renderRows($("sitePopularOrganizations"), summary.popular_organizations || [], (organization) => `<tr><td>${esc(organization.name || organization.id)}</td><td>${Number(organization.views) || 0}</td></tr>`);
+    $("siteStatisticsStatus").hidden = false;
+    $("siteStatisticsStatus").textContent = "Показатели рассчитаны по записанным и дедуплицированным событиям.";
   }
 
   async function activate() {
@@ -135,8 +162,31 @@
       if (button.dataset.adminTab === "badges") await loadBadges();
       if (button.dataset.adminTab === "campaigns") await loadCampaigns();
       if (button.dataset.adminTab === "owners") await loadOwners();
+      if (button.dataset.adminTab === "verification") await loadVerificationRequests();
+      if (button.dataset.adminTab === "business-claims") await loadBusinessClaims();
+      if (button.dataset.adminTab === "site-statistics") await loadSiteStatistics();
     } catch (error) { message(error.message, true); }
   }));
+
+  $("verificationRows")?.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-verification-decision]");
+    if (!button) return;
+    const decision = button.dataset.verificationDecision;
+    const note = decision === "rejected" ? prompt("Причина отклонения:")?.trim() : "";
+    if (decision === "rejected" && !note) return;
+    button.disabled = true;
+    try { await request("verification-review", "POST", { requestId: button.dataset.requestId, decision, note }); message("Решение по заявке сохранено."); await loadVerificationRequests(); }
+    catch (error) { message(error.message, true); button.disabled = false; }
+  });
+  $("businessClaimRows")?.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-claim-decision]"); if (!button) return;
+    const decision = button.dataset.claimDecision;
+    const note = decision === "rejected" ? prompt("Причина отклонения:")?.trim() : "";
+    if (decision === "rejected" && !note) return;
+    button.disabled = true;
+    try { await request("business-claim-review", "POST", { requestId: button.dataset.requestId, decision, note }); message("Решение по заявке сохранено."); await loadBusinessClaims(); }
+    catch (error) { message(error.message, true); button.disabled = false; }
+  });
 
   $("submissionStatus").addEventListener("change", () => loadSubmissions().catch((error) => message(error.message, true)));
   $("submissionRows").addEventListener("click", async (event) => {
